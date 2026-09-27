@@ -4,8 +4,10 @@ import secrets
 
 
 TRUE_RANDOM_HISTORY_FILE = "true_random_history.json"
+TRUE_RANDOM_TRACK_CACHE_FILE = "true_random_track_cache.json"
 TRUE_RANDOM_HISTORY_SIZE = 30
 TRUE_RANDOM_QUEUE_LIMIT = 100
+TRUE_RANDOM_TRACK_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
 def dedupe_track_uris(track_uris):
@@ -95,4 +97,44 @@ def save_true_random_history(history_path, history, logger=None):
     except Exception as exc:
         if logger:
             logger(f"True Randomizer: failed to save history. {exc}")
+        return False
+
+
+def load_true_random_track_cache(cache_path, logger=None):
+    try:
+        with open(cache_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        if logger:
+            logger(f"True Randomizer: track cache is malformed, starting fresh. {exc}")
+        return {}
+    except Exception as exc:
+        if logger:
+            logger(f"True Randomizer: failed to load track cache, starting fresh. {exc}")
+        return {}
+
+    if not isinstance(data, dict):
+        if logger:
+            logger("True Randomizer: track cache has invalid structure, starting fresh.")
+        return {}
+
+    return data
+
+
+def save_true_random_track_cache(cache_path, cache, logger=None):
+    try:
+        directory = os.path.dirname(cache_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        temp_path = f"{cache_path}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as file:
+            json.dump(cache, file, indent=4)
+        os.replace(temp_path, cache_path)
+        return True
+    except Exception as exc:
+        if logger:
+            logger(f"True Randomizer: failed to save track cache. {exc}")
         return False
