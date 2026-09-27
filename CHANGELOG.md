@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.2
+### Added:
+- optional True Randomizer mode for Random Queue schedules
+- local per-playlist True Randomizer recent-track history
+
+### Changed:
+- Windows build script now uses PyInstaller from the local virtual environment
+
 ## 2.1.1
 ### Changed:
 - spotipy version bump to 2.26.0

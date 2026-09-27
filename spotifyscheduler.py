@@ -23,12 +23,22 @@ import locale
 from platformdirs import PlatformDirs
 from tkinter.messagebox import askyesno
 import random
+from true_randomizer import (
+    TRUE_RANDOM_HISTORY_FILE,
+    TRUE_RANDOM_HISTORY_SIZE,
+    build_true_random_queue,
+    dedupe_track_uris,
+    load_true_random_history,
+    save_true_random_history,
+    update_true_random_history,
+)
 
-VER="2.1.1"
+VER="2.1.2"
 CONFIG_FILE="config.json"
 NEWSCHEDULE="schedule.json"
 LOG_FILE="output.log"
 DATA_DIRECTORY = PlatformDirs(appname="spotify-scheduler", appauthor=False, ensure_exists=True).user_data_dir
+TRUE_RANDOM_HISTORY_PATH = os.path.join(DATA_DIRECTORY, TRUE_RANDOM_HISTORY_FILE)
 
 try:
     current_pid = os.getpid()
@@ -76,7 +86,8 @@ def load_config():
         "KILLSWITCH_ON": True,
         "WEEKDAYS_ONLY": False,
         "AUTO_SPOTIFY": True,
-        "SKIP_EXPLICIT": False
+        "SKIP_EXPLICIT": False,
+        "TRUE_RANDOMIZER": False
     }
 
     try:
@@ -231,6 +242,7 @@ def save_settings():
         config['WEEKDAYS_ONLY'] = setting_vars['WEEKDAYS_ONLY'].get() 
         config['AUTO_SPOTIFY'] = setting_vars['AUTO_SPOTIFY'].get() 
         config['SKIP_EXPLICIT'] = setting_vars['SKIP_EXPLICIT'].get()
+        config['TRUE_RANDOMIZER'] = setting_vars['TRUE_RANDOMIZER'].get()
 
         save_config(config)
         config = load_config()
@@ -1043,8 +1055,12 @@ ttk.Checkbutton(settings_frame, text=_("Auto Spotify"), variable=setting_vars['A
 setting_vars['SKIP_EXPLICIT'] = tk.BooleanVar(value=config.get('SKIP_EXPLICIT', False))
 ttk.Checkbutton(settings_frame, text=_("Skip explicit tracks"), variable=setting_vars['SKIP_EXPLICIT']).grid(row=7, columnspan=2, pady=5,padx=5)
 
+setting_vars['TRUE_RANDOMIZER'] = tk.BooleanVar(value=config.get('TRUE_RANDOMIZER', False))
+ttk.Checkbutton(settings_frame, text=_("True Randomizer"), variable=setting_vars['TRUE_RANDOMIZER']).grid(row=8, columnspan=2, pady=(5,0),padx=5)
+ttk.Label(settings_frame, text=_("True Randomizer help"), wraplength=500).grid(row=9, columnspan=2, pady=(0,5), padx=10)
+
 buttons_frame = ttk.Frame(settings_frame)
-buttons_frame.grid(row=8, column=0, columnspan=2, pady=10)
+buttons_frame.grid(row=10, column=0, columnspan=2, pady=10)
 
 save_btn = ttk.Button(buttons_frame, text=_("Save Settings"), command=save_settings)
 save_btn.pack(side="left", padx=5)
@@ -1056,7 +1072,7 @@ settingsstatus_text = tk.StringVar()
 settingsstatus_text.set("")
 
 settingsstatus = ttk.Label(settings_frame, textvariable=settingsstatus_text, wraplength=500, anchor="w")
-settingsstatus.grid(row=9, columnspan=2, padx=10)
+settingsstatus.grid(row=11, columnspan=2, padx=10)
 
 def on_settings_change(*args):
     # Check if any setting differs from config
@@ -1090,7 +1106,7 @@ devices_list = tk.StringVar()
 devices_list.set("")
 
 devices_label = ttk.Label(settings_frame, textvariable=devices_list, wraplength=500, anchor="w")
-devices_label.grid(row=10, columnspan=2, pady=10, padx=10, sticky='w')
+devices_label.grid(row=12, columnspan=2, pady=10, padx=10, sticky='w')
 
 def get_value_for_schedule(day=None,hour=None,value="playlist"): #value should be playlist or randomqueue
     global last_schedule
@@ -2455,8 +2471,77 @@ last_playlist=''
 last_randomqueue=None
 randomqueuefix_playlist=None
 randomqueuefix_run=False
+true_randomizer_active_block=None
+
+def get_active_schedule_block_key():
+    if not last_schedule:
+        return None
+    return f"{datetime.now().strftime('%Y-%m-%d')}|{last_schedule.strip()}"
+
+def fetch_playlist_track_uris(playlist_id):
+    tracks = []
+    limit = 50
+    offset = 0
+
+    while True:
+        results = sp.playlist_items(
+            playlist_id,
+            fields="items(item(uri)),total",
+            additional_types=['track'],
+            limit=limit,
+            offset=offset
+        )
+        items = results.get("items", []) if results else []
+
+        for item in items:
+            track = item.get("item") if isinstance(item, dict) else None
+            uri = track.get("uri") if isinstance(track, dict) else None
+            if uri:
+                tracks.append(uri)
+
+        offset += limit
+        if len(items) < limit:
+            break
+
+    return tracks
+
+def create_true_random_playlist(playlist_id, playlist_name):
+    timestamped_print(f"True Randomizer: generating fresh queue for {playlist_name}")
+
+    source_tracks = dedupe_track_uris(fetch_playlist_track_uris(playlist_id))
+    if not source_tracks:
+        status.set(_("No tracks found in playlist"))
+        timestamped_print("True Randomizer: no valid tracks found in source playlist.")
+        return None
+
+    history = load_true_random_history(TRUE_RANDOM_HISTORY_PATH, timestamped_print)
+    recent_history = history.get(playlist_id, [])
+    queue = build_true_random_queue(source_tracks, recent_history)
+
+    if not queue:
+        status.set(_("No tracks found in playlist"))
+        timestamped_print("True Randomizer: generated queue is empty.")
+        return None
+
+    recent_excluded = len([uri for uri in source_tracks if uri in set(recent_history)])
+    timestamped_print(f"True Randomizer: source tracks={len(source_tracks)}, recent excluded={recent_excluded}, queue size={len(queue)}")
+
+    temp_playlist = sp.current_user_playlist_create(name=f"{playlist_name} ({_("Random queue")})", description=f"🔀 True Randomizer generated by Spotify Scheduler v{VER} on {datetime.now()}", public=False)
+    sp.current_user_unfollow_playlist(temp_playlist['id'])
+    sp.playlist_add_items(temp_playlist['id'], queue)
+
+    history[playlist_id] = update_true_random_history(
+        recent_history,
+        queue,
+        TRUE_RANDOM_HISTORY_SIZE
+    )
+    save_true_random_history(TRUE_RANDOM_HISTORY_PATH, history, timestamped_print)
+
+    timestamped_print("True Randomizer: generated queue for new schedule block")
+    return temp_playlist['id']
+
 def play_music():
-    global last_playlist, last_spotify_run, closest_start_time, last_randomqueue, user_id, randomqueuefix_playlist, randomqueuefix_run
+    global last_playlist, last_spotify_run, closest_start_time, last_randomqueue, user_id, randomqueuefix_playlist, randomqueuefix_run, true_randomizer_active_block
     try:
         if target_device:
             PLAYLIST_ID=get_value_for_schedule(value="playlist")
@@ -2464,8 +2549,30 @@ def play_music():
                 closest_start_time=None
                 randomqueue=get_value_for_schedule(value="randomqueue")
                 playlist_info=get_playlist_info(PLAYLIST_ID)
+                randomqueue_started = False
                 if (randomqueue and "37i9dQ" not in PLAYLIST_ID):
-                    if (last_playlist==PLAYLIST_ID and randomqueuefix_playlist) and (spotify_button_check() and config['AUTO_SPOTIFY'] and config['KILLSWITCH_ON']): # hotfix for spotify client not playing random queue; cause: when spotify's api has problems, client doesn't see any tracks in playlist unless manually clicked; fix requires killing and autorunning spotify enabled; fix doesn't work when different playlist was playing before without any pause - spotify's api reports that music is playing, but actually it's not
+                    name=playlist_info['name']
+                    active_block_key = get_active_schedule_block_key()
+
+                    if config.get('TRUE_RANDOMIZER', False):
+                        if true_randomizer_active_block == active_block_key and randomqueuefix_playlist:
+                            timestamped_print("True Randomizer: current schedule block already has a generated queue; reusing it.")
+                            sp.start_playback(device_id=target_device["id"], context_uri=f"spotify:playlist:{randomqueuefix_playlist}")
+                            randomqueue_started = True
+                        else:
+                            try:
+                                temp_playlist_id = create_true_random_playlist(PLAYLIST_ID, name)
+                                if temp_playlist_id:
+                                    randomqueuefix_playlist=temp_playlist_id
+                                    true_randomizer_active_block=active_block_key
+                                    sp.start_playback(device_id=target_device["id"], context_uri=f"spotify:playlist:{temp_playlist_id}")
+                                    randomqueue_started = True
+                            except Exception as e:
+                                timestamped_print(f"True Randomizer error: {error(e)} Falling back to existing random queue.")
+
+                    if randomqueue_started:
+                        pass
+                    elif (not config.get('TRUE_RANDOMIZER', False)) and (last_playlist==PLAYLIST_ID and randomqueuefix_playlist) and (spotify_button_check() and config['AUTO_SPOTIFY'] and config['KILLSWITCH_ON']): # hotfix for spotify client not playing random queue; cause: when spotify's api has problems, client doesn't see any tracks in playlist unless manually clicked; fix requires killing and autorunning spotify enabled; fix doesn't work when different playlist was playing before without any pause - spotify's api reports that music is playing, but actually it's not
                         if not randomqueuefix_run: #restart only once
                             killswitch("Spotify not playing random queue, restarting client.")
                             run_spotify()
@@ -2473,6 +2580,7 @@ def play_music():
                             timestamped_print("Spotify client restarted, waiting 5 seconds...")
                             t.sleep(5)
                         sp.start_playback(device_id=target_device["id"], context_uri=f"spotify:playlist:{randomqueuefix_playlist}")
+                        randomqueue_started = True
                         t.sleep(2.5) # give spotify some time to start playback, specially when api is slow
                     else:
                         name=playlist_info['name']
@@ -2512,13 +2620,16 @@ def play_music():
                             sp.playlist_add_items(temp_playlist['id'], track_uris[:100])
                             randomqueuefix_playlist=temp_playlist['id']
                             sp.start_playback(device_id=target_device["id"], context_uri=f"spotify:playlist:{temp_playlist['id']}")
+                            randomqueue_started = True
 
                 else:
                     sp.start_playback(device_id=target_device["id"], context_uri=f"spotify:playlist:{PLAYLIST_ID}")
 
+                if randomqueue_started and randomqueue and config.get('TRUE_RANDOMIZER', False):
+                    true_randomizer_active_block=get_active_schedule_block_key()
                 last_playlist=PLAYLIST_ID
                 last_randomqueue=randomqueue
-                randomqueue_status = 'Enabled' if (randomqueue and "37i9dQ" not in PLAYLIST_ID and results) else 'Disabled'
+                randomqueue_status = 'Enabled' if randomqueue_started else 'Disabled'
                 string=""
                 if playlist_info:
                     string=f"Playlist: {playlist_info['name']}, Owner: {playlist_info['owner']}"
@@ -2572,7 +2683,7 @@ def pause_music(retries=3, delay=2):
     killswitch("Pausing music - Failed to pause music.")
 
 def spotify_main():
-    global last_playlist, target_device, randomqueuefix_playlist, randomqueuefix_run
+    global last_playlist, target_device, randomqueuefix_playlist, randomqueuefix_run, true_randomizer_active_block
     if not is_paused:
         if not sp or not spstatus:
             initialize_sp()
@@ -2592,15 +2703,28 @@ def spotify_main():
                     
                 PLAYLIST_ID=get_value_for_schedule(value="playlist")
                 randomqueue=get_value_for_schedule(value="randomqueue")
-                if (not current_playback) or (not current_playback["is_playing"]) or (not last_playlist==PLAYLIST_ID) or (target_device and target_device["id"]!=active_device["id"]) or (last_randomqueue!=randomqueue):
+                active_block_key = get_active_schedule_block_key()
+                true_randomizer_due = (
+                    config.get('TRUE_RANDOMIZER', False)
+                    and randomqueue
+                    and PLAYLIST_ID
+                    and "37i9dQ" not in PLAYLIST_ID
+                    and active_block_key != true_randomizer_active_block
+                )
+                if (not current_playback) or (not current_playback["is_playing"]) or (not last_playlist==PLAYLIST_ID) or (target_device and target_device["id"]!=active_device["id"]) or (last_randomqueue!=randomqueue) or true_randomizer_due:
                     if PLAYLIST_ID:
                         play_music()
                     else:
                         status.set(_("Playlist not set"))
                 else:
                     status.set(_("Music is currently playing."))
-                    randomqueuefix_playlist=None
-                    randomqueuefix_run=False
+                    if not (
+                        config.get('TRUE_RANDOMIZER', False)
+                        and randomqueue
+                        and active_block_key == true_randomizer_active_block
+                    ):
+                        randomqueuefix_playlist=None
+                        randomqueuefix_run=False
                     try:
                         if config['SKIP_EXPLICIT'] and current_playback and current_playback["item"].get("explicit"):
                             sp.next_track(device_id=target_device["id"])

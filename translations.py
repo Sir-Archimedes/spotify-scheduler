@@ -121,6 +121,8 @@ translations = {
         "Unsaved changes": "Posiadasz niezapisane zmiany!",
         "This device": "To urządzenie",
         "Skip explicit tracks": "Pomijaj treści nieprzyzwoite",
+        "True Randomizer": "Prawdziwe losowanie",
+        "True Randomizer help": "Generuje świeżą losową kolejkę dla każdego bloku harmonogramu i omija ostatnio wybrane utwory.",
         "Web players were detected but are not supported.": "Wykryto odtwarzacze internetowe, ale nie są one obsługiwane.",
         "A Spotify Premium subscription is required.\nWithout subscription, this application will not function properly, due to Spotify API limitations.": "Wymagana jest subskrypcja Spotify Premium.\nBez subskrypcji ta aplikacja nie będzie działać poprawnie z powodu ograniczeń API Spotify.",
         "Current product type:": "Aktualny typ produktu:",
@@ -244,5 +246,7 @@ translations = {
         "Error fetching recently played songs.": "Error fetching recently played songs at {date}",
         "Last refreshed at": "Last refreshed at {date}",
         "Unsaved changes": "You have unsaved changes!",
+        "True Randomizer": "True Randomizer",
+        "True Randomizer help": "Generate a fresh random queue for every schedule block and avoid recently selected tracks.",
     }
 }
