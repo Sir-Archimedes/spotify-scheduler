@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.3
+### Fixed:
+- make True Randomizer playback use cached track URI queues instead of creating temporary playlists at schedule start
+- improve True Randomizer cache behavior, progress logging, and duplicate/local track reporting
+
 ## 2.1.2
 ### Added:
 - optional True Randomizer mode for Random Queue schedules

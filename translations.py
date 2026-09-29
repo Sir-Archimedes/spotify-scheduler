@@ -118,6 +118,7 @@ translations = {
         "Enabled": "Włączona",
         "Disabled": "Wyłączona",
         "No tracks found in playlist": "Nie znaleziono utworów na playliście",
+        "No cached True Randomizer tracks": "Brak zapisanych utworów True Randomizer",
         "Unsaved changes": "Posiadasz niezapisane zmiany!",
         "This device": "To urządzenie",
         "Skip explicit tracks": "Pomijaj treści nieprzyzwoite",
@@ -129,6 +130,7 @@ translations = {
         "True Randomizer cache complete": "Buforowanie True Randomizer zakończone.",
         "Cached playlist complete": "{name}: zapisano {count} utworów ({slots} bloków dzisiaj)",
         "Cached playlist partial": "{name}: zapisano częściowo {count} utworów ({slots} bloków dzisiaj)",
+        "Cached playlist failed": "{name}: nie zapisano utworów ({slots} bloków dzisiaj)",
         "True Randomizer cache failed": "Buforowanie True Randomizer nie powiodło się: {error}",
         "Web players were detected but are not supported.": "Wykryto odtwarzacze internetowe, ale nie są one obsługiwane.",
         "A Spotify Premium subscription is required.\nWithout subscription, this application will not function properly, due to Spotify API limitations.": "Wymagana jest subskrypcja Spotify Premium.\nBez subskrypcji ta aplikacja nie będzie działać poprawnie z powodu ograniczeń API Spotify.",
@@ -257,10 +259,12 @@ translations = {
         "True Randomizer help": "Generate a fresh random queue for every schedule block and avoid recently selected tracks.",
         "Cache True Randomizer": "Cache True Randomizer",
         "No True Randomizer playlists to cache today.": "No True Randomizer playlists to cache today.",
+        "No cached True Randomizer tracks": "No cached True Randomizer tracks",
         "Caching True Randomizer playlists": "Caching True Randomizer playlists ({done}/{total})...",
         "True Randomizer cache complete": "True Randomizer cache complete.",
         "Cached playlist complete": "{name}: cached {count} tracks ({slots} block(s) today)",
         "Cached playlist partial": "{name}: partially cached {count} tracks ({slots} block(s) today)",
+        "Cached playlist failed": "{name}: not cached ({slots} block(s) today)",
         "True Randomizer cache failed": "True Randomizer cache failed: {error}",
     }
 }

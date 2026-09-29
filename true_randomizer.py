@@ -7,7 +7,6 @@ TRUE_RANDOM_HISTORY_FILE = "true_random_history.json"
 TRUE_RANDOM_TRACK_CACHE_FILE = "true_random_track_cache.json"
 TRUE_RANDOM_HISTORY_SIZE = 30
 TRUE_RANDOM_QUEUE_LIMIT = 100
-TRUE_RANDOM_TRACK_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
 def dedupe_track_uris(track_uris):

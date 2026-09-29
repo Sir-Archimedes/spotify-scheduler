@@ -27,7 +27,6 @@ from true_randomizer import (
     TRUE_RANDOM_HISTORY_FILE,
     TRUE_RANDOM_HISTORY_SIZE,
     TRUE_RANDOM_TRACK_CACHE_FILE,
-    TRUE_RANDOM_TRACK_CACHE_MAX_AGE_SECONDS,
     build_true_random_queue,
     dedupe_track_uris,
     load_true_random_history,
@@ -37,7 +36,7 @@ from true_randomizer import (
     update_true_random_history,
 )
 
-VER="2.1.2"
+VER="2.1.3"
 CONFIG_FILE="config.json"
 NEWSCHEDULE="schedule.json"
 LOG_FILE="output.log"
@@ -2172,11 +2171,14 @@ def get_playlist_info(id=None):
             playlist_info["snapshot_id"] = playlist.get("snapshot_id")
             if isinstance(playlist.get("tracks"), dict):
                 playlist_info["tracks_total"] = playlist["tracks"].get("total")
-                playlist_info["track_uris"] = [
-                    item.get("track", {}).get("uri")
-                    for item in playlist["tracks"].get("items", [])
-                    if isinstance(item, dict) and isinstance(item.get("track"), dict)
-                ]
+                track_uris = []
+                for item in playlist["tracks"].get("items", []):
+                    if not isinstance(item, dict):
+                        continue
+                    track = item.get("track") or item.get("item")
+                    if isinstance(track, dict) and track.get("uri"):
+                        track_uris.append(track["uri"])
+                playlist_info["track_uris"] = track_uris
             if "scheduler_warning" in playlist:
                 playlist_info["scheduler_warning"] = playlist["scheduler_warning"]
 
@@ -2499,7 +2501,12 @@ true_randomizer_fallback_block=None
 def get_active_schedule_block_key():
     if not last_schedule:
         return None
-    return f"{datetime.now().strftime('%Y-%m-%d')}|{last_schedule.strip()}"
+    return get_schedule_block_key(datetime.now().strftime("%Y-%m-%d"), last_schedule)
+
+def get_schedule_block_key(date_str, time_range):
+    if not time_range:
+        return None
+    return f"{date_str}|{time_range.strip()}"
 
 def fetch_playlist_track_uris(playlist_id):
     tracks = []
@@ -2522,63 +2529,28 @@ def fetch_playlist_track_uris(playlist_id):
             if uri:
                 tracks.append(uri)
 
+        timestamped_print(f"True Randomizer cache: fetched {len(tracks)} playlist entries so far.")
         offset += limit
         if len(items) < limit:
             break
 
     return tracks
 
-def get_true_random_source_tracks(playlist_id, playlist_snapshot_id=None, seed_track_uris=None, tracks_total=None):
-    seed_tracks = dedupe_track_uris(seed_track_uris or [])
+def get_cached_true_random_source_tracks(playlist_id, playlist_snapshot_id=None):
     cache = load_true_random_track_cache(TRUE_RANDOM_TRACK_CACHE_PATH, timestamped_print)
     cached_entry = cache.get(playlist_id, {}) if isinstance(cache, dict) else {}
 
     if isinstance(cached_entry, dict):
         cached_tracks = dedupe_track_uris(cached_entry.get("tracks", []))
         cached_snapshot_id = cached_entry.get("snapshot_id")
-        cached_at = cached_entry.get("cached_at", 0)
-        cache_age = t.time() - cached_at if isinstance(cached_at, (int, float)) else None
-        cache_is_current = (
-            cached_tracks
-            and (
-                (playlist_snapshot_id and cached_snapshot_id == playlist_snapshot_id)
-                or (cache_age is not None and cache_age <= TRUE_RANDOM_TRACK_CACHE_MAX_AGE_SECONDS)
-            )
-        )
-        if cache_is_current:
+        if cached_tracks:
+            if playlist_snapshot_id and cached_snapshot_id and cached_snapshot_id != playlist_snapshot_id:
+                timestamped_print("True Randomizer: cached playlist may be stale, but using it to avoid schedule-start API requests.")
             timestamped_print(f"True Randomizer: using cached source tracks ({len(cached_tracks)} tracks).")
             return cached_tracks
 
-    if seed_tracks and (len(seed_tracks) >= min(tracks_total or 100, 100)):
-        timestamped_print(f"True Randomizer: using playlist metadata track page ({len(seed_tracks)} tracks) to avoid extra playlist item requests.")
-        cache[playlist_id] = {
-            "snapshot_id": playlist_snapshot_id,
-            "cached_at": t.time(),
-            "tracks": seed_tracks
-        }
-        save_true_random_track_cache(TRUE_RANDOM_TRACK_CACHE_PATH, cache, timestamped_print)
-        return seed_tracks
-
-    try:
-        tracks = dedupe_track_uris(fetch_playlist_track_uris(playlist_id))
-        if tracks:
-            cache[playlist_id] = {
-                "snapshot_id": playlist_snapshot_id,
-                "cached_at": t.time(),
-                "tracks": tracks
-            }
-            save_true_random_track_cache(TRUE_RANDOM_TRACK_CACHE_PATH, cache, timestamped_print)
-        return tracks
-    except Exception:
-        if isinstance(cached_entry, dict):
-            cached_tracks = dedupe_track_uris(cached_entry.get("tracks", []))
-            if cached_tracks and len(cached_tracks) >= len(seed_tracks):
-                timestamped_print(f"True Randomizer: full playlist fetch failed. Using existing cached source tracks ({len(cached_tracks)} tracks).")
-                return cached_tracks
-        if seed_tracks:
-            timestamped_print(f"True Randomizer: full playlist fetch failed. Using playlist metadata track page ({len(seed_tracks)} tracks).")
-            return seed_tracks
-        raise
+    timestamped_print("True Randomizer: no cached source tracks found. Use Settings > Cache True Randomizer before schedule start.")
+    return []
 
 def get_today_true_random_cache_targets():
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -2606,31 +2578,49 @@ def get_today_true_random_cache_targets():
 
 def cache_true_random_playlist_tracks(playlist_id):
     cache = load_true_random_track_cache(TRUE_RANDOM_TRACK_CACHE_PATH, timestamped_print)
+    cached_entry = cache.get(playlist_id, {}) if isinstance(cache, dict) else {}
+    cached_tracks = dedupe_track_uris(cached_entry.get("tracks", [])) if isinstance(cached_entry, dict) else []
     playlist_info = get_playlist_info(playlist_id)
     playlist_name = playlist_info.get("name") or playlist_id
     snapshot_id = playlist_info.get("snapshot_id")
     seed_tracks = dedupe_track_uris(playlist_info.get("track_uris", []))
+    tracks_total = playlist_info.get("tracks_total") or 0
+
+    if cached_tracks and (not snapshot_id or cached_entry.get("snapshot_id") == snapshot_id) and (not tracks_total or len(cached_tracks) >= tracks_total):
+        timestamped_print(f"True Randomizer cache: using existing cache for {playlist_name}: {len(cached_tracks)} tracks.")
+        return {
+            "name": playlist_name,
+            "count": len(cached_tracks),
+            "partial": False,
+            "failed": False,
+            "message": None
+        }
 
     try:
-        tracks = dedupe_track_uris(fetch_playlist_track_uris(playlist_id))
+        total_message = f" of {tracks_total}" if tracks_total else ""
+        timestamped_print(f"True Randomizer cache: attempting full playlist cache for {playlist_name}{total_message} tracks.")
+        fetched_tracks = fetch_playlist_track_uris(playlist_id)
+        tracks = dedupe_track_uris(fetched_tracks)
         if not tracks:
             raise ValueError("No valid tracks found in playlist.")
 
+        skipped_tracks = len(fetched_tracks) - len(tracks)
         cache[playlist_id] = {
             "snapshot_id": snapshot_id,
             "cached_at": t.time(),
             "tracks": tracks
         }
         save_true_random_track_cache(TRUE_RANDOM_TRACK_CACHE_PATH, cache, timestamped_print)
+        skipped_message = f" ({skipped_tracks} duplicate/local/unsupported entries skipped)" if skipped_tracks else ""
+        timestamped_print(f"True Randomizer cache: full fetch cached {len(tracks)} unique playable tracks for {playlist_name}{skipped_message}.")
         return {
             "name": playlist_name,
             "count": len(tracks),
             "partial": False,
+            "failed": False,
             "message": None
         }
     except Exception as e:
-        cached_entry = cache.get(playlist_id, {})
-        cached_tracks = dedupe_track_uris(cached_entry.get("tracks", [])) if isinstance(cached_entry, dict) else []
         fallback_tracks = cached_tracks if len(cached_tracks) >= len(seed_tracks) else seed_tracks
         if fallback_tracks:
             cache[playlist_id] = {
@@ -2643,9 +2633,16 @@ def cache_true_random_playlist_tracks(playlist_id):
                 "name": playlist_name,
                 "count": len(fallback_tracks),
                 "partial": True,
+                "failed": False,
                 "message": str(e)
             }
-        raise
+        return {
+            "name": playlist_name,
+            "count": 0,
+            "partial": False,
+            "failed": True,
+            "message": str(e)
+        }
 
 def cache_today_true_randomizer_playlists():
     try:
@@ -2667,6 +2664,12 @@ def cache_today_true_randomizer_playlists():
             root.update_idletasks()
             result = cache_true_random_playlist_tracks(playlist_id)
             slot_count = len(targets[playlist_id])
+            if result.get("failed"):
+                line = _("Cached playlist failed", name=result["name"], slots=slot_count)
+                timestamped_print(f"True Randomizer cache failed for {result['name']}: {error(result['message'])}")
+                results.append(line)
+                continue
+
             if result["partial"]:
                 line = _("Cached playlist partial", name=result["name"], count=result["count"], slots=slot_count)
                 timestamped_print(f"True Randomizer cache partial for {result['name']}: {result['count']} tracks. {error(result['message'])}")
@@ -2689,18 +2692,35 @@ def cache_today_true_randomizer_playlists():
         except Exception:
             pass
 
-def create_true_random_playlist(playlist_id, playlist_name, playlist_snapshot_id=None, seed_track_uris=None, tracks_total=None):
+def start_true_random_playlist_playback(playback_source):
+    try:
+        sp.shuffle(False, device_id=target_device["id"])
+    except Exception as e:
+        timestamped_print(f"True Randomizer: couldn't disable Spotify shuffle before playback: {error(e)}")
+    if isinstance(playback_source, list):
+        sp.start_playback(
+            device_id=target_device["id"],
+            uris=playback_source,
+            offset={"position": 0},
+            position_ms=0
+        )
+    else:
+        sp.start_playback(
+            device_id=target_device["id"],
+            context_uri=f"spotify:playlist:{playback_source}",
+            offset={"position": 0},
+            position_ms=0
+        )
+
+def create_true_random_playlist(playlist_id, playlist_name, playlist_snapshot_id=None):
     timestamped_print(f"True Randomizer: generating fresh queue for {playlist_name}")
 
-    source_tracks = get_true_random_source_tracks(
+    source_tracks = get_cached_true_random_source_tracks(
         playlist_id,
-        playlist_snapshot_id=playlist_snapshot_id,
-        seed_track_uris=seed_track_uris,
-        tracks_total=tracks_total
+        playlist_snapshot_id=playlist_snapshot_id
     )
     if not source_tracks:
-        status.set(_("No tracks found in playlist"))
-        timestamped_print("True Randomizer: no valid tracks found in source playlist.")
+        status.set(_("No cached True Randomizer tracks"))
         return None
 
     history = load_true_random_history(TRUE_RANDOM_HISTORY_PATH, timestamped_print)
@@ -2715,10 +2735,6 @@ def create_true_random_playlist(playlist_id, playlist_name, playlist_snapshot_id
     recent_excluded = len([uri for uri in source_tracks if uri in set(recent_history)])
     timestamped_print(f"True Randomizer: source tracks={len(source_tracks)}, recent excluded={recent_excluded}, queue size={len(queue)}")
 
-    temp_playlist = sp.current_user_playlist_create(name=f"{playlist_name} ({_("Random queue")})", description=f"🔀 True Randomizer generated by Spotify Scheduler v{VER} on {datetime.now()}", public=False)
-    sp.current_user_unfollow_playlist(temp_playlist['id'])
-    sp.playlist_add_items(temp_playlist['id'], queue)
-
     history[playlist_id] = update_true_random_history(
         recent_history,
         queue,
@@ -2727,7 +2743,7 @@ def create_true_random_playlist(playlist_id, playlist_name, playlist_snapshot_id
     save_true_random_history(TRUE_RANDOM_HISTORY_PATH, history, timestamped_print)
 
     timestamped_print("True Randomizer: generated queue for new schedule block")
-    return temp_playlist['id']
+    return queue
 
 def play_music():
     global last_playlist, last_spotify_run, closest_start_time, last_randomqueue, user_id, randomqueuefix_playlist, randomqueuefix_run, true_randomizer_active_block, true_randomizer_fallback_block
@@ -2747,33 +2763,26 @@ def play_music():
                     if config.get('TRUE_RANDOMIZER', False):
                         if true_randomizer_active_block == active_block_key and randomqueuefix_playlist:
                             timestamped_print("True Randomizer: current schedule block already has a playback playlist; reusing it.")
-                            sp.start_playback(device_id=target_device["id"], context_uri=f"spotify:playlist:{randomqueuefix_playlist}")
+                            start_true_random_playlist_playback(randomqueuefix_playlist)
                             if true_randomizer_fallback_block == active_block_key:
                                 true_randomizer_fallback_started = True
                             else:
                                 randomqueue_started = True
                         else:
                             try:
-                                temp_playlist_id = create_true_random_playlist(
+                                track_queue = create_true_random_playlist(
                                     PLAYLIST_ID,
                                     name,
-                                    playlist_snapshot_id=playlist_info.get("snapshot_id"),
-                                    seed_track_uris=playlist_info.get("track_uris"),
-                                    tracks_total=playlist_info.get("tracks_total")
+                                    playlist_snapshot_id=playlist_info.get("snapshot_id")
                                 )
-                                if temp_playlist_id:
-                                    randomqueuefix_playlist=temp_playlist_id
+                                if track_queue:
+                                    randomqueuefix_playlist=track_queue
                                     true_randomizer_active_block=active_block_key
                                     true_randomizer_fallback_block=None
-                                    sp.start_playback(device_id=target_device["id"], context_uri=f"spotify:playlist:{temp_playlist_id}")
+                                    start_true_random_playlist_playback(track_queue)
                                     randomqueue_started = True
                                 else:
-                                    timestamped_print("True Randomizer: no generated queue available. Playing source playlist without random queue for this block.")
-                                    randomqueuefix_playlist=PLAYLIST_ID
-                                    true_randomizer_active_block=active_block_key
-                                    true_randomizer_fallback_block=active_block_key
-                                    sp.start_playback(device_id=target_device["id"], context_uri=f"spotify:playlist:{PLAYLIST_ID}")
-                                    true_randomizer_fallback_started = True
+                                    timestamped_print("True Randomizer: cache missing for this playlist. Falling back to existing Random Queue behavior.")
                             except Exception as e:
                                 timestamped_print(f"True Randomizer error: {error(e)} Playing source playlist without random queue for this block to avoid repeat requests.")
                                 randomqueuefix_playlist=PLAYLIST_ID
